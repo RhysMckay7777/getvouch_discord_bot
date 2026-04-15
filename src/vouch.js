@@ -18,7 +18,8 @@ const HANDLE_FIELD = {
 };
 
 function encodeInputs(inputs) {
-  return Buffer.from(JSON.stringify(inputs)).toString("base64");
+  // Vouch requires base64url (no padding), not standard base64
+  return Buffer.from(JSON.stringify(inputs)).toString("base64url");
 }
 
 function packMetadata({ submissionId, discordUserId }) {
