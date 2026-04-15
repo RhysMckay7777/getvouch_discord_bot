@@ -156,6 +156,146 @@ app.post("/api/webhook/vouch", async (req, res) => {
   res.sendStatus(200);
 });
 
+// Lumina webhook: POST /api/webhook/lumina
+// Lumina sends X-Webhook-Signature: t=<unix>,v1=<hex>
+// where hex = HMAC_SHA256(secret, "<t>.<rawBody>")
+const crypto = require("crypto");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+} = require("discord.js");
+
+app.post(
+  "/api/webhook/lumina",
+  express.raw({ type: "application/json", limit: "1mb" }),
+  async (req, res) => {
+    const rawBody = req.body.toString("utf8");
+    const secret = process.env.LUMINA_WEBHOOK_SECRET;
+
+    if (!secret) {
+      console.error("LUMINA_WEBHOOK_SECRET not configured");
+      return res.status(500).send("Webhook secret not configured");
+    }
+
+    // Parse signature header: "t=<unix>,v1=<hex>"
+    const sigHeader = req.headers["x-webhook-signature"] || "";
+    const parts = Object.fromEntries(
+      sigHeader.split(",").map((p) => p.split("=").map((s) => s.trim()))
+    );
+    const { t, v1 } = parts;
+
+    if (!t || !v1) {
+      console.warn("Rejected Lumina webhook: missing signature parts");
+      return res.status(401).send("Missing signature");
+    }
+
+    // Replay protection: reject if timestamp differs from now by more than 5 min
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(nowSec - Number(t)) > 300) {
+      console.warn(`Rejected Lumina webhook: stale timestamp (diff ${nowSec - Number(t)}s)`);
+      return res.status(401).send("Stale timestamp");
+    }
+
+    // Compute expected HMAC
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(`${t}.${rawBody}`)
+      .digest("hex");
+
+    // Timing-safe compare
+    const valid =
+      expected.length === v1.length &&
+      crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
+
+    if (!valid) {
+      console.warn("Rejected Lumina webhook: HMAC mismatch");
+      return res.status(401).send("Bad signature");
+    }
+
+    // Signature is valid — parse body
+    let payload;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return res.status(400).send("Bad JSON");
+    }
+
+    console.log("Lumina webhook received:", payload.event || payload.type);
+
+    // Dispatch by event type
+    const eventName = payload.event || payload.type;
+    const data = payload.data || payload.campaign || payload;
+
+    if (eventName === "campaign.created") {
+      await postCampaignAnnouncement(data);
+    } else {
+      console.log(`Unhandled Lumina event: ${eventName}`);
+    }
+
+    res.sendStatus(200);
+  }
+);
+
+async function postCampaignAnnouncement(campaign) {
+  const channelId = process.env.ANNOUNCEMENTS_CHANNEL_ID;
+  if (!channelId) {
+    console.warn("ANNOUNCEMENTS_CHANNEL_ID not set, skipping announcement");
+    return;
+  }
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased()) {
+      console.warn(`Channel ${channelId} not found or not text-based`);
+      return;
+    }
+
+    const platforms = Array.isArray(campaign.accepted_platforms)
+      ? campaign.accepted_platforms.join(" \u2022 ")
+      : campaign.accepted_platforms || "all platforms";
+
+    const embed = new EmbedBuilder()
+      .setTitle(`\uD83C\uDFAC  New Campaign: ${campaign.name || "Untitled"}`)
+      .setDescription(
+        (campaign.description || "A new campaign just went live!") +
+          `\n\n\uD83D\uDCB0 **CPM:** $${(campaign.cpm_rate || 0).toFixed(2)} per 1k views` +
+          `\n\uD83D\uDCB5 **Max Payout:** $${(campaign.max_payout || 0).toFixed(2)}` +
+          `\n\uD83C\uDF10 **Platforms:** ${platforms}`
+      )
+      .setColor(0x7c3aed)
+      .setTimestamp();
+
+    if (campaign.thumbnail_url) embed.setImage(campaign.thumbnail_url);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`enter_campaign_${campaign.id}`)
+        .setLabel("\uD83D\uDE80 Enter Campaign")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    if (campaign.requirements_url) {
+      row.addComponents(
+        new ButtonBuilder()
+          .setLabel("\uD83D\uDCCB Requirements")
+          .setStyle(ButtonStyle.Link)
+          .setURL(campaign.requirements_url)
+      );
+    }
+
+    await channel.send({
+      content: "@everyone A new campaign is live!",
+      embeds: [embed],
+      components: [row],
+    });
+    console.log(`Posted campaign announcement: ${campaign.name}`);
+  } catch (err) {
+    console.error("Failed to post campaign announcement:", err);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Webhook server listening on port ${PORT}`);
