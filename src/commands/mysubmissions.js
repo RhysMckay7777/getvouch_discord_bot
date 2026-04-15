@@ -1,5 +1,13 @@
-const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  MessageFlags,
+} = require("discord.js");
 const { fetchClipperSubmissions } = require("../api");
+const { DATASOURCES } = require("../vouch");
 
 const statusDisplay = {
   awaiting_stats: { icon: "\u23F3", label: "Awaiting Stats", color: 0xffc107 },
@@ -24,58 +32,92 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const email = interaction.options.getString("email");
 
+    let data;
     try {
-      const data = await fetchClipperSubmissions(email);
+      data = await fetchClipperSubmissions(email);
+    } catch (err) {
+      console.error("Fetch submissions error:", err);
+      return interaction.editReply("No submissions found, or something went wrong.");
+    }
 
-      if (!data.submissions || data.submissions.length === 0) {
-        return interaction.editReply("No submissions found for that email.");
-      }
+    if (!data.submissions || data.submissions.length === 0) {
+      return interaction.editReply("No submissions found for that email.");
+    }
 
-      // Send each submission as its own embed for better readability
-      const embeds = data.submissions.slice(0, 10).map((sub) => {
-        const s = statusDisplay[sub.status] || { icon: "\u2753", label: sub.status, color: 0x9e9e9e };
-        const pIcon = platformIcons[sub.platform] || "\uD83C\uDF10";
+    const MAX_SHOWN = 5; // Discord allows max 5 action rows per message
+    const slice = data.submissions.slice(0, MAX_SHOWN);
 
-        const statsLine = sub.views > 0
+    // Header embed
+    const header = new EmbedBuilder()
+      .setTitle(`\uD83D\uDCCB  Your Submissions`)
+      .setDescription(
+        `**${data.total}** total submission(s) for \`${email}\`` +
+          (data.total > MAX_SHOWN ? `\n*Showing ${MAX_SHOWN} of ${data.total}.*` : "")
+      )
+      .setColor(0x7c3aed);
+
+    // One embed + one action row per submission (if unverified + platform supported)
+    const embeds = [header];
+    const components = [];
+
+    for (const sub of slice) {
+      const s =
+        statusDisplay[sub.status] ||
+        { icon: "\u2753", label: sub.status, color: 0x9e9e9e };
+      const pIcon = platformIcons[sub.platform] || "\uD83C\uDF10";
+
+      const statsLine =
+        sub.views > 0
           ? `\uD83D\uDC41 \`${sub.views.toLocaleString()}\` views  \u2022  \u2764\uFE0F \`${sub.likes.toLocaleString()}\` likes  \u2022  \uD83D\uDCAC \`${(sub.comments || 0).toLocaleString()}\` comments`
           : "\uD83D\uDD52 Stats pending...";
 
-        const earningsLine = sub.est_earnings > 0
-          ? `\uD83D\uDCB5 Est: \`$${sub.est_earnings.toFixed(2)}\`` + (sub.paid_earnings > 0 ? `  \u2022  Paid: \`$${sub.paid_earnings.toFixed(2)}\`` : "")
+      const earningsLine =
+        sub.est_earnings > 0
+          ? `\uD83D\uDCB5 Est: \`$${sub.est_earnings.toFixed(2)}\`` +
+            (sub.paid_earnings > 0 ? `  \u2022  Paid: \`$${sub.paid_earnings.toFixed(2)}\`` : "")
           : "";
 
-        const verif = sub.verification_status && sub.verification_status !== "pending"
+      const verif =
+        sub.verification_status && sub.verification_status !== "pending"
           ? `\uD83D\uDD10 Verification: **${sub.verification_status}**\n`
           : "";
 
-        return new EmbedBuilder()
-          .setColor(s.color)
-          .setTitle(`${pIcon}  ${sub.platform.charAt(0).toUpperCase() + sub.platform.slice(1)}`)
-          .setDescription(
-            `**Status:** ${s.icon} ${s.label}\n` +
+      const embed = new EmbedBuilder()
+        .setColor(s.color)
+        .setTitle(
+          `${pIcon}  ${sub.platform.charAt(0).toUpperCase() + sub.platform.slice(1)}`
+        )
+        .setDescription(
+          `**Status:** ${s.icon} ${s.label}\n` +
             verif +
             `\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n` +
             `\uD83D\uDD17 ${sub.post_url}\n\n` +
-            statsLine + (earningsLine ? `\n${earningsLine}` : "")
-          )
-          .setFooter({ text: `ID: ${sub.submission_id}` })
-          .setTimestamp(new Date(sub.created_at));
-      });
+            statsLine +
+            (earningsLine ? `\n${earningsLine}` : "")
+        )
+        .setFooter({ text: `ID: ${sub.submission_id}` })
+        .setTimestamp(new Date(sub.created_at));
 
-      // Header embed
-      const header = new EmbedBuilder()
-        .setTitle(`\uD83D\uDCCB  Your Submissions`)
-        .setDescription(`**${data.total}** total submission(s) for \`${email}\``)
-        .setColor(0x7c3aed);
+      embeds.push(embed);
 
-      await interaction.editReply({ embeds: [header, ...embeds] });
-    } catch (err) {
-      console.error("Fetch submissions error:", err);
-      await interaction.editReply("No submissions found, or something went wrong.");
+      // Add a Verify Stats button for unverified submissions on supported platforms
+      const isUnverified =
+        !sub.verification_status || sub.verification_status === "pending";
+      if (isUnverified && DATASOURCES[sub.platform]) {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`verify_stats_${sub.submission_id}_${sub.platform}`)
+            .setLabel(`\uD83D\uDD10 Verify Stats \u2014 ${sub.platform}`)
+            .setStyle(ButtonStyle.Primary)
+        );
+        components.push(row);
+      }
     }
+
+    await interaction.editReply({ embeds, components });
   },
 };

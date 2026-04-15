@@ -36,13 +36,18 @@ for (const file of commandFiles) {
 
 // Load event handlers
 const campaignEntry = require("./events/campaignEntry");
+const verification = require("./events/verification");
 
 // Handle interactions
 client.on("interactionCreate", async (interaction) => {
   // Button clicks
   if (interaction.isButton()) {
     try {
-      await campaignEntry.handleButton(interaction);
+      if (interaction.customId.startsWith("verify_stats_")) {
+        await verification.handleVerifyButton(interaction);
+      } else {
+        await campaignEntry.handleButton(interaction);
+      }
     } catch (error) {
       console.error("Button handler error:", error);
     }
@@ -52,7 +57,11 @@ client.on("interactionCreate", async (interaction) => {
   // Modal submissions
   if (interaction.isModalSubmit()) {
     try {
-      await campaignEntry.handleModalSubmit(interaction);
+      if (interaction.customId.startsWith("verify_modal_")) {
+        await verification.handleVerifyModal(interaction);
+      } else {
+        await campaignEntry.handleModalSubmit(interaction);
+      }
     } catch (error) {
       console.error("Modal handler error:", error);
     }

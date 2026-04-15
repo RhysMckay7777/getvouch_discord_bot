@@ -3,10 +3,13 @@ const {
   TextInputBuilder,
   TextInputStyle,
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   MessageFlags,
 } = require("discord.js");
 const { submitEntry } = require("../api");
+const { DATASOURCES } = require("../vouch");
 
 // Handle "Single Submit" / "Bulk Submit" button clicks → show appropriate modal
 async function handleButton(interaction) {
@@ -106,17 +109,40 @@ async function handleSingleSubmit(interaction) {
     });
 
     if (result.status === "ok") {
+      const platform = result.platform || "unknown";
+      const platformIcon = {
+        instagram: "\uD83D\uDCF7",
+        tiktok: "\uD83C\uDFB5",
+        youtube: "\u25B6\uFE0F",
+        twitter: "\uD83D\uDC26",
+      }[platform] || "\uD83C\uDF10";
+
       const embed = new EmbedBuilder()
-        .setTitle("Submission Received!")
-        .setDescription(result.detail || `Submitted to **${result.platform}**`)
-        .setColor(0x00c853)
-        .addFields(
-          { name: "Submission ID", value: `${result.submission_id}`, inline: true },
-          { name: "Platform", value: result.platform || "Unknown", inline: true }
+        .setTitle(`\u2705  Submission Received`)
+        .setDescription(
+          `${platformIcon} **Platform:** ${platform}\n` +
+            `\uD83D\uDCCB **Status:** \`awaiting_stats\`\n` +
+            `\uD83D\uDD10 **Verification:** \`pending\`\n\n` +
+            `\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n` +
+            `Click **Verify Stats** below to prove ownership of your \`${platform}\` account ` +
+            `and unlock your verified status.`
         )
+        .setColor(0x00c853)
+        .setFooter({ text: `ID: ${result.submission_id}` })
         .setTimestamp();
 
-      await interaction.editReply({ embeds: [embed] });
+      const components = [];
+      if (DATASOURCES[platform]) {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`verify_stats_${result.submission_id}_${platform}`)
+            .setLabel("\uD83D\uDD10 Verify Stats")
+            .setStyle(ButtonStyle.Primary)
+        );
+        components.push(row);
+      }
+
+      await interaction.editReply({ embeds: [embed], components });
     } else {
       await interaction.editReply(`Submission failed: ${result.detail || result.message || "Unknown error"}`);
     }
