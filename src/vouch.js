@@ -22,17 +22,16 @@ function encodeInputs(inputs) {
 }
 
 function packMetadata({ submissionId, discordUserId }) {
-  // Vouch metadata max 256 chars. Compact JSON.
-  return JSON.stringify({ s: submissionId, d: discordUserId });
+  // Vouch metadata max 256 chars. Pipe-delimited, URL-safe format.
+  return `${submissionId}|${discordUserId}`;
 }
 
 function unpackMetadata(metadataStr) {
-  try {
-    const obj = JSON.parse(metadataStr);
-    return { submissionId: obj.s, discordUserId: obj.d };
-  } catch {
-    return { submissionId: metadataStr, discordUserId: null };
+  if (!metadataStr || typeof metadataStr !== "string") {
+    return { submissionId: null, discordUserId: null };
   }
+  const [submissionId, discordUserId] = metadataStr.split("|");
+  return { submissionId: submissionId || null, discordUserId: discordUserId || null };
 }
 
 /**
